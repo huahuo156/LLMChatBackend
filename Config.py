@@ -35,4 +35,7 @@ class Config:
     ALLOWED_FILE_EXTENSIONS = {'md','markdown','pdf', 'txt', 'docx', 'doc', 'pptx', 'ppt', 'c', 'java', 'py'}
     ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg'}
 
+    # 存储语音合成临时文件
+    TEMP_AUDIO_PATH = '.\\audio'
+
     DEBUG = True

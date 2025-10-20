@@ -12,6 +12,9 @@ chat_bp.add_url_rule(rule='/chat_with_image', methods=['POST'], view_func=chat_w
 # 带有文件的对话
 chat_bp.add_url_rule(rule='/chat_with_file', methods=['POST'], view_func=chat_with_file)
 
+# 文本转语音
+chat_bp.add_url_rule(rule='/tts',methods=['post'],view_func=text_to_speech)
+
 # 健康检查接口
 chat_bp.add_url_rule(rule='/health',methods=['GET'],view_func=health_check)
 

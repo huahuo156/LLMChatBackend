@@ -1,7 +1,7 @@
 import base64
 import os
 
-from flask import request, jsonify, current_app
+from flask import request, jsonify, current_app, send_file
 from langchain.agents import create_tool_calling_agent, AgentExecutor
 from langchain_community.embeddings import DashScopeEmbeddings
 from langchain_community.tools import TavilySearchResults
@@ -18,6 +18,7 @@ from langchain.docstore.document import Document
 from utils.session_storage import session_manager
 from langchain.memory import ConversationBufferMemory
 from utils.network_utils import fetch_url_content
+from utils.audio_utils import dash_text_to_speech, pyttsx_text_to_speech
 import datetime
 
 
@@ -309,6 +310,30 @@ def clear_current_chat_history():
         {'message': f'Chat history and associated vector data for session {session_id} cleared successfully.'}), 200
 
 
+def text_to_speech():
+    """将指定的文本转化为语音"""
+    data = request.get_json()
+    if not data or 'text' not in data:
+        return jsonify({'error': "Missing text in request body"}), 400
+
+    text = data['text']
+    dashscope_api_key = current_app.config.get('DASHSCOPE_API_KEY', None)
+    if not dashscope_api_key:
+        # 配置中没有 dashscope api key
+        audio_file_path = pyttsx_text_to_speech(text=text)
+    else:
+        # 配置中有 dashscope api key
+        audio_file_path = dash_text_to_speech(
+            text=text,
+            dashscope_api_key=dashscope_api_key
+        )
+
+    if not audio_file_path:
+        return jsonify({"error": "Can't convert the text to the speech,please try again"}), 400
+    else:
+        return send_file(audio_file_path, as_attachment=True)
+
+
 def generate_embeddings(file_name: str, file_content: str, session_id: str):
     """
     :param file_name: 是临时存储上传文件的文件名称
@@ -316,7 +341,6 @@ def generate_embeddings(file_name: str, file_content: str, session_id: str):
     :param session_id: 是本轮对话的会话 ID
     :return: none
     """
-
     persist_dir = os.path.join(current_app.config.get('EMBEDDINGS_PATH'), session_id)
     os.makedirs(persist_dir, exist_ok=True)
 
@@ -325,7 +349,7 @@ def generate_embeddings(file_name: str, file_content: str, session_id: str):
         chain = get_generate_summary_chain()
         summary = chain.invoke({'input': file_content})
 
-        file_content = '本文的摘要是：\n\n' + summary + "\n\n" + file_content
+        file_content = '本文的摘要\主要内容是：\n\n' + summary + "\n\n" + file_content
 
         documents = [Document(
             page_content=file_content,
@@ -359,7 +383,6 @@ def query_vectorstore(query: str, session_id: str):
     : param session_id: 必要参数，但在创建agent之前已绑定该形参，无需理会
     : return res: 查询数据库获得的具体内容，可能查询失败，返回“并没有查询到相关的内容”，否则，返回最佳匹配的三个“文档”，并拼接在一起
     """
-
     persist_dir = os.path.join(current_app.config.get('EMBEDDINGS_PATH'), session_id)
 
     if not os.path.exists(persist_dir):
