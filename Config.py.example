@@ -3,22 +3,16 @@ import os
 
 class Config:
     # LLM api 的配置
-    LLM_API_KEY: str = ""
     LLM_MODEL_NAME: str = "deepseek-reasoner"
     LLM_BASE_URL: str = "https://api.deepseek.com/v1"
 
     # embedding api 的配置
     DASH_EMBEDDINGS_MODEL_NAME: str = 'text-embedding-v1'
-    DASHSCOPE_API_KEY: str = ''
     EMBEDDINGS_PATH:str = '.\\embedding'
 
     # vision llm api 的配置
-    VISION_MODEL_API_KEY:str = ''
     VISION_MODEL_NAME:str = 'qwen3-vl-plus'
     VISION_MODEL_BASE_URL:str = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
-
-    # 搜索引擎的密钥
-    TAVILY_API_KEY=""
 
     # redis 存储的配置
     REDIS_HOST = os.environ.get('REDIS_HOST') or 'localhost'  # Redis 服务器地址

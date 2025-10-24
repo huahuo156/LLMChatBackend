@@ -12,6 +12,7 @@ from langchain_community.document_loaders import (
     UnstructuredFileLoader  # 通用加载器，可处理 .java, .c 等
 )
 import easyocr
+from models.prompts import GENERATE_SUMMARY_PROMPT,IMAGE_DESC_PROMPT
 
 
 def allowed_file(filename):
@@ -95,11 +96,10 @@ def process_file(filepath):
         except Exception as e:
             raise ValueError(f"Could not load file {filepath} using {type(loader).__name__}: {e}")
 
-    # 如果上面没有定义 loader (例如，代码文件直接读取的情况)，则函数应已返回内容
-    # 此行理论上不应执行到
     raise RuntimeError(f"Logic error in process_file for {filepath}")
 
 
+# 使用 OCR 技术尝试识别图片上的文字
 def preprocess_image(filepath):
     # 支持简体中文、英文的文字识别
     reader = easyocr.Reader(['ch_sim', 'en'])
@@ -123,20 +123,10 @@ def preprocess_image(filepath):
     return ocr_text
 
 
-def get_image_desc(vision_llm,image_base64: str):
-    system_prompt = """
-    你是一位专业的图像内容描述专家。你的任务是接收一张图片，并生成一段清晰、准确、全面且客观的描述。
-    具体要求如下：
-    1.  **内容全面**：描述图片中包含的所有主要对象、场景、人物、活动、背景元素等。
-    2.  **细节清晰**：尽可能地捕捉并描述重要的视觉细节，例如物体的颜色、形状、大小、纹理、位置关系，人物的衣着、表情、姿态，环境的光线、氛围等。
-    3.  **逻辑连贯**：组织语言，使描述流畅、有条理，能够清晰地呈现图片的整体画面和各元素之间的关系。
-    4.  **客观准确**：基于图片实际内容进行描述，避免添加主观臆断、猜测或图片中未明确显示的信息。
-    5.  **语言精炼**：使用自然、流畅、精炼的语言，避免冗余和模糊不清的表述。
-    6.  **聚焦核心**：如果图片内容复杂，优先描述最核心、最突出的部分。
-    请直接输出对图片的详细描述，无需添加如“这张图片显示了”或“我看到”之类的前缀。
-    """
+# 通过 VISION LLM 获得图片的描述以及可能的文字
+def get_image_desc(vision_llm, image_base64: str):
     vision_prompt_template = ChatPromptTemplate.from_messages([
-        ('system',system_prompt),
+        ('system', IMAGE_DESC_PROMPT),
         ("human", [
             {"type": "text", "text": "请详细描述这张图片的内容以及可能包含的文字。"},
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}}
@@ -145,3 +135,13 @@ def get_image_desc(vision_llm,image_base64: str):
     vision_chain = vision_prompt_template | vision_llm | StrOutputParser()
     image_description = vision_chain.invoke({})
     return image_description
+
+
+# 建立 生成文章总结的链
+def get_generate_summary_chain(llm):
+    generate_summary_prompt = ChatPromptTemplate.from_messages([
+        ('system', GENERATE_SUMMARY_PROMPT),
+        ('human', '{input}')
+    ])
+    generate_summary_chain = generate_summary_prompt | llm | StrOutputParser()
+    return generate_summary_chain

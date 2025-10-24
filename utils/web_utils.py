@@ -1,8 +1,92 @@
-import re
+import os
 
 import requests
 from bs4 import BeautifulSoup
 from langchain_core.tools import tool
+from tavily import TavilyClient
+
+
+def get_tavily_client():
+    # 1. 从环境变量中读取API密钥
+    api_key = os.environ.get("TAVILY_API_KEY")
+    if not api_key:
+        return None
+
+    # 2. 初始化Tavily客户端
+    tavily = TavilyClient(api_key=api_key)
+
+    return tavily
+
+
+@tool
+def web_search(query: str) -> str:
+    """
+    一个专门用于 llm agent 联网查询的通用工具，查询与参数 query 相关的内容，并返回查询结果，除非配置错误
+    :param query: 必需的参数，用于描述需要联网查询的内容
+    :return: 返回联网查询 query 的内容
+    """
+
+    tavily = get_tavily_client()
+
+    if not tavily:
+        return "错误：配置 tavily client 失败"
+
+    try:
+        response = tavily.search(
+            query=query,
+            search_depth="basic",
+            include_answer=True
+        )
+        if response.get("answer"):
+            return response["answer"]
+
+        # 如果没有综合性回答，则格式化原始结果
+        formatted_results = []
+        for result in response.get("results", []):
+            formatted_results.append(f"- {result['title']}: {result['content']}")
+
+        if not formatted_results:
+            return f"抱歉，没有找到与{query}相关的内容。"
+
+        return "根据搜索，为您找到以下信息：\n" + "\n".join(formatted_results)
+
+    except Exception as e:
+        return f"错误：执行Tavily搜索时出现问题 - {e}"
+
+
+@tool
+def crawl_url_content(url: str) -> str:
+    """
+    一个专门用于 llm agent 联网访问指定URL的通用工具，可以对指定的 URL 进行简单的内容爬取；该工具大概率可能失败...
+    :param url: 必需的参数，指定要爬取的网页
+    :return: 返回爬取指定网页的内容
+    """
+
+    tavily = get_tavily_client()
+
+    if not tavily:
+        return "错误：配置 tavily client 失败"
+
+    try:
+        response = tavily.crawl(
+            url=url,
+            instructions="Find all pages on agents",
+            max_depth=4,
+            max_breadth=20,
+            extract_depth="advanced"
+        )
+
+        formatted_results = []
+        for result in response.get("results", []):
+            formatted_results.append(f"- {result.get('title', 'None')}: {result.get('content', 'None')}")
+
+        if not formatted_results:
+            return f"抱歉，无法获取指定网页 {url} 上的内容。"
+
+        return "根据访问，为您找到以下信息：\n" + "\n".join(formatted_results)
+
+    except Exception as e:
+        return f"错误：执行Tavily网页爬取时出现问题 - {e}"
 
 
 @tool

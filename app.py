@@ -5,17 +5,15 @@ from dotenv import load_dotenv, find_dotenv
 _ = load_dotenv(find_dotenv())
 
 from Config import Config
-from llm_chat import chat_bp
-
+from routes import register_routes
 
 
 def create_app():
-
     app = Flask(__name__)
     app.config.from_object(Config)
 
-    # 注册 Blueprint
-    app.register_blueprint(chat_bp)
+    # 注册路由
+    register_routes(app)
 
     return app
 
