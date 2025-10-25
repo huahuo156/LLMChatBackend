@@ -3,12 +3,11 @@ import logging
 import redis
 from flask import current_app
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from .mysql_storage import session_manager as mysql_session_manager
 
 
 class RedisSessionManager:
     def __init__(self):
-        # 在初始化时或每次需要连接时获取客户端
-        # self.redis_client = self._get_redis_client()
         pass
 
     def _get_redis_client(self):
@@ -37,7 +36,10 @@ class RedisSessionManager:
         return r
 
     def get_session_history(self, session_id: str, default=None):
-        """从 Redis 获取会话历史"""
+        """
+        从 Redis 获取会话历史。
+        如果 Redis 中没有，则尝试从 MySQL 加载并存入 Redis，然后返回。
+        """
         if default is None:
             default = []
         redis_client = self._get_redis_client()
@@ -45,6 +47,7 @@ class RedisSessionManager:
 
         session_data = redis_client.get(key)
         if session_data:
+            # Redis 中有数据，直接返回
             try:
                 history_json = json.loads(session_data)
                 history = []
@@ -56,12 +59,44 @@ class RedisSessionManager:
                         history.append(AIMessage(content=msg_obj['content']))
                     elif msg_obj['type'] == 'system':
                         history.append(SystemMessage(content=msg_obj['content']))
+                logging.info(f"Retrieved session {session_id} from Redis.")
                 return history
             except (json.JSONDecodeError, KeyError, TypeError) as e:
-                current_app.logger.error(f"Error loading session history for {session_id}: {e}")
-                return default
+                current_app.logger.error(f"Error loading session history for {session_id} from Redis: {e}")
+                # 如果 Redis 数据损坏，尝试从 MySQL 加载
+                return self._load_from_mysql_and_cache(session_id, default)
         else:
+            # Redis 中没有数据，尝试从 MySQL 加载
+            logging.info(f"Session {session_id} not found in Redis, attempting to load from MySQL.")
+            return self._load_from_mysql_and_cache(session_id, default)
+
+    def _load_from_mysql_and_cache(self, session_id: str, default):
+        """从 MySQL 加载会话历史并缓存到 Redis"""
+        try:
+            history_from_mysql = mysql_session_manager.get_session_history(session_id, default)
+            # 将从 MySQL 加载的数据存入 Redis，供后续快速访问
+            self.set_session_history(session_id, history_from_mysql)
+            logging.info(f"Loaded session {session_id} from MySQL and cached in Redis.")
+            return history_from_mysql
+        except Exception as e:
+            current_app.logger.error(f"Error loading session {session_id} from MySQL: {e}")
             return default
+
+    def sync_session_to_mysql(self, session_id: str):
+        """
+        从 Redis 获取会话历史并同步到 MySQL。
+        这个方法需要在对话结束时被调用。
+        """
+        # 从 Redis 获取最新的会话历史
+        latest_history_from_redis = self.get_session_history(session_id, default=[])
+
+        try:
+            # 将最新的历史保存到 MySQL
+            mysql_session_manager.set_session_history(session_id, latest_history_from_redis)
+            logging.info(f"Synced session {session_id} from Redis to MySQL.")
+        except Exception as e:
+            current_app.logger.error(f"Error syncing session {session_id} to MySQL: {e}")
+
 
     def set_session_history(self, session_id: str, history: list, expire_time=3600):
         """将会话历史保存到 Redis"""
@@ -81,8 +116,6 @@ class RedisSessionManager:
             redis_client.setex(key, expire_time, json.dumps(history_json))
         except Exception as e:
             current_app.logger.error(f"Error saving session history for {session_id}: {e}")
-            # 可以选择抛出异常或静默失败，取决于你的需求
-            # raise e
 
     def clear_session_history(self, session_id: str):
         """从 Redis 清除指定会话的历史"""
@@ -113,24 +146,11 @@ class RedisSessionManager:
                 for i, msg_obj in enumerate(history_json):
                     msg_type = msg_obj['type'].upper()
                     original_content = msg_obj['content']
-
-                    # 尝试编码内容以检查是否能被当前环境的默认编码处理
-                    # 如果不能，则进行转义或替换处理
                     try:
-                        # 尝试用系统默认编码（通常是gbk在Windows控制台）编码内容
-                        # 这会触发错误，如果内容包含无法编码的字符
                         original_content.encode('gbk')
-                        # 如果成功，直接使用原始内容
                         safe_content = original_content
                     except UnicodeEncodeError:
-                        # 如果失败，使用 'unicode_escape' 编码进行转义
-                        # 这会将无法编码的字符显示为 \Uxxxx 的形式
-                        # 或者使用 'replace' 或 'ignore' 错误处理
-                        # safe_content = original_content.encode('gbk', errors='replace').decode('gbk') # 用 ? 替换
-                        # safe_content = original_content.encode('gbk', errors='ignore').decode('gbk') # 忽略
                         safe_content = original_content.encode('unicode_escape').decode('ascii')  # 转义
-                        # 或者使用 'latin-1' 作为中间编码（虽然不完美），但这通常不可行且可能导致乱码
-                        # 更安全的方式是使用 'unicode_escape' 或 'replace'
 
                     print(f"Round {i + 1} - {msg_type}: {safe_content}")
                 print("--- End of Session History ---\n")
@@ -149,6 +169,7 @@ class RedisSessionManager:
         except Exception as e:
             logging.error(f"Redis health check failed: {e}")
             return False
+
 
 # 创建一个全局实例，以便在其他模块中使用
 session_manager = RedisSessionManager()

@@ -19,24 +19,26 @@ class ChatService:
     def __init__(self, session_manager: RedisSessionManager, vector_db_manager: VectorDBManager):
         self.session_manager = session_manager
         self.vector_db_manager = vector_db_manager
+        self.default_tools = [web_search, crawl_url_content,fetch_url_content]
 
-    def handle_chat(self, user_message, system_prompt, session_id):
+    def handle_chat(self, user_message, user_system_prompt, session_id):
         # 获取历史对话
         session = self.session_manager.get_session_history(session_id)
         self.session_manager.print_session_history(session_id)
         # _get_agent 需要访问 self.vector_db_manager
         # 构建智能体
-        agent = self._get_agent(session_id, system_prompt, session)
+        agent = self._get_agent(session_id, user_system_prompt, session)
         # 调用智能体
         res = agent.invoke({'input': user_message, "chat_history": session})
         # 更新历史对话
         ai_response = res.get('output', '')
         final_session_messages = agent.memory.chat_memory.messages
         self.session_manager.set_session_history(session_id, final_session_messages)
+        self.session_manager.sync_session_to_mysql(session_id)
 
         return ai_response
 
-    def handle_chat_with_image(self, image_file, user_message, system_prompt, session_id):
+    def handle_chat_with_image(self, image_file, user_message, user_system_prompt, session_id):
         if not allowed_image(image_file.filename):
             raise ValueError('File type not allowed')
 
@@ -47,26 +49,27 @@ class ChatService:
                 img_data = base64.b64encode(img_file.read()).decode('utf-8')
 
             # 对用户上传的图片进行提取文字和描述的预处理，并将其加入至上下文中
-            image_description = ("本轮对话中用户提及一张图片，关于这张图片的描述如下所示，包括但不限于图片中的文字：\n\n"
+            image_description = ("本轮对话中提及一张图片，关于这张图片的描述如下所示，包括但不限于图片中的文字：\n\n"
                                  + get_image_desc(get_vision_llm(), img_data))
 
-            system_prompt = system_prompt + image_description
+            user_system_prompt = image_description + "\n\n" + user_system_prompt
 
             self.session_manager.print_session_history(session_id)
             session = self.session_manager.get_session_history(session_id)
-            agent = self._get_agent(session_id, system_prompt, session)
+            agent = self._get_agent(session_id, user_system_prompt, session)
             res = agent.invoke({"input": user_message})
             ai_response = res.get("output", "")
 
             # 将本次对话记录添加到会话历史中
             session.append(AIMessage(content=ai_response))
             self.session_manager.set_session_history(session_id, session)
+            self.session_manager.sync_session_to_mysql(session_id)
 
             return ai_response
         finally:
             remove_temp_file(filepath)
 
-    def handle_chat_with_file(self, uploaded_file, user_message, system_prompt, session_id):
+    def handle_chat_with_file(self, uploaded_file, user_message, user_system_prompt, session_id):
         if not allowed_file(uploaded_file.filename):
             raise ValueError('File type not allowed')
 
@@ -80,13 +83,14 @@ class ChatService:
 
             self.session_manager.print_session_history(session_id)
             session = self.session_manager.get_session_history(session_id)
-            agent = self._get_agent(session_id, system_prompt, session)
+            agent = self._get_agent(session_id, user_system_prompt, session)
             res = agent.invoke({'input': user_message})
             ai_response = res.get('output', '')
 
             # 保存更新后的会话历史到 Redis
             final_session_messages = agent.memory.chat_memory.messages
             self.session_manager.set_session_history(session_id, final_session_messages)
+            self.session_manager.sync_session_to_mysql(session_id)
 
             return ai_response
         finally:
@@ -97,7 +101,7 @@ class ChatService:
         # 同时清理相关的向量数据库
         self.vector_db_manager.clear_vector_db(session_id)
 
-    def _get_agent(self, session_id: str, system_prompt: str, session: list):
+    def _get_agent(self, session_id: str, user_system_prompt: str, session: list):
 
         # 查询向量数据库工具
         @tool
@@ -111,10 +115,9 @@ class ChatService:
 
         vector_db_dir = os.path.join(self.vector_db_manager.get_embeddings_path(), session_id)
         # 可使用的工具的配置
+        tools = list(self.default_tools)
         if os.path.exists(vector_db_dir):
-            tools = [web_search, crawl_url_content,fetch_url_content, query_vectorstore_with_session_id]
-        else:
-            tools = [web_search, crawl_url_content,fetch_url_content]
+            tools = tools.append(query_vectorstore_with_session_id)
 
         # 记忆的配置
         current_memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
@@ -125,7 +128,7 @@ class ChatService:
 
         # 提示词工程
         prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt),
+            ("system", user_system_prompt),
             ("system", AGENT_SYSTEM_PROMPT.format(current_time=current_time)),
             ("placeholder", "{chat_history}"),
             ("human", "{input}"),
